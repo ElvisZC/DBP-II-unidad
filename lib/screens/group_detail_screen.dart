@@ -9,119 +9,159 @@ class GroupDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Grupo')),
+      appBar: AppBar(
+        title: const Text('Detalle del grupo'),
+      ),
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
             .collection('groups')
             .doc(groupId)
             .snapshots(),
-        builder: (context, groupSnapshot) {
-          if (!groupSnapshot.hasData) {
+        builder: (context, snapshot) {
+          if (!snapshot.hasData || snapshot.data!.data() == null) {
             return const Center(child: CircularProgressIndicator());
           }
 
           final groupData =
-              groupSnapshot.data!.data() as Map<String, dynamic>;
-          final metadata = groupData['metadata'];
+              snapshot.data!.data() as Map<String, dynamic>;
 
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      metadata['name'],
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    const SizedBox(height: 4),
-                    Text('Código: ${metadata['joinCode']}'),
-                  ],
+          if (!groupData.containsKey('metadata')) {
+            return const Center(
+              child: Text('Estructura del grupo inválida'),
+            );
+          }
+
+          final metadata =
+              Map<String, dynamic>.from(groupData['metadata'] ?? {});
+          final membersMap =
+              Map<String, dynamic>.from(metadata['members'] ?? {});
+          final balances =
+              Map<String, dynamic>.from(groupData['balances'] ?? {});
+
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Nombre del grupo
+                Text(
+                  metadata['name'] ?? 'Grupo',
+                  style: Theme.of(context).textTheme.headlineMedium,
                 ),
-              ),
+                const SizedBox(height: 8),
 
-              const Divider(),
+                // Código del grupo
+                Text(
+                  'Código del grupo: ${metadata['joinCode'] ?? '-'}',
+                  style: const TextStyle(color: Colors.grey),
+                ),
 
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
+                const SizedBox(height: 24),
+
+                // ================= BALANCES =================
+                const Text(
                   'Balances',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 8),
 
-              Expanded(
-                child: StreamBuilder<DocumentSnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('groups')
-                      .doc(groupId)
-                      .collection('balances')
-                      .doc('current')
-                      .snapshots(),
-                  builder: (context, balanceSnapshot) {
-                    if (!balanceSnapshot.hasData ||
-                        !balanceSnapshot.data!.exists) {
-                      return const Center(
-                          child: Text('Sin balances aún'));
-                    }
+                if (balances.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text('Sin balances aún'),
+                    ),
+                  )
+                else
+                  Column(
+                    children: balances.entries.map((entry) {
+                      final parts = entry.key.split('_');
+                      final debtorId = parts[0];
+                      final creditorId = parts[1];
+                      final amount =
+                          (entry.value as num).toDouble();
 
-                    final balanceData =
-                        balanceSnapshot.data!.data() as Map<String, dynamic>;
-                    final Map<String, dynamic> debts =
-                        balanceData['debts'] ?? {};
+                      final debtorName =
+                          membersMap[debtorId] ?? 'Usuario';
+                      final creditorName =
+                          membersMap[creditorId] ?? 'Usuario';
 
-                    if (debts.isEmpty) {
-                      return const Center(
-                          child: Text('Todos están saldados'));
-                    }
+                      return Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.swap_horiz),
+                          title:
+                              Text('$debtorName → $creditorName'),
+                          trailing: Text(
+                            'S/ ${amount.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
 
-                    return ListView(
-                      children: debts.entries.map((entry) {
-                        final ids = entry.key.split('_');
-                        final debtorId = ids[0];
-                        final creditorId = ids[1];
-                        final amount = entry.value;
+                const SizedBox(height: 24),
 
-                        return FutureBuilder<List<DocumentSnapshot>>(
-                          future: Future.wait([
-                            FirebaseFirestore.instance
-                                .collection('users')
-                                .doc(debtorId)
-                                .get(),
-                            FirebaseFirestore.instance
-                                .collection('users')
-                                .doc(creditorId)
-                                .get(),
-                          ]),
-                          builder: (context, userSnapshot) {
-                            if (!userSnapshot.hasData) {
-                              return const ListTile(
-                                  title: Text('Cargando...'));
-                            }
+                // ================= HISTORIAL =================
+                const Text(
+                  'Historial de gastos',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
 
-                            final debtorName =
-                                userSnapshot.data![0]['name'];
-                            final creditorName =
-                                userSnapshot.data![1]['name'];
+                Expanded(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('groups')
+                        .doc(groupId)
+                        .collection('expenses')
+                        .orderBy('createdAt', descending: true)
+                        .snapshots(),
+                    builder: (context, expenseSnapshot) {
+                      if (!expenseSnapshot.hasData) {
+                        return const Center(
+                            child: CircularProgressIndicator());
+                      }
 
-                            return ListTile(
-                              leading:
-                                  const Icon(Icons.account_balance_wallet),
-                              title: Text(
-                                  '$debtorName debe S/ ${amount.toStringAsFixed(2)}'),
-                              subtitle:
-                                  Text('a $creditorName'),
-                            );
-                          },
+                      if (expenseSnapshot.data!.docs.isEmpty) {
+                        return const Center(
+                          child: Text('No hay gastos registrados'),
                         );
-                      }).toList(),
-                    );
-                  },
+                      }
+
+                      return ListView(
+                        children: expenseSnapshot.data!.docs.map((doc) {
+                          final expense =
+                              doc.data() as Map<String, dynamic>;
+
+                          return ListTile(
+                            leading:
+                                const Icon(Icons.receipt_long),
+                            title: Text(expense['description']),
+                            subtitle: Text(
+                                'Pagado por ${expense['paidByName']}'),
+                            trailing: Text(
+                              'S/ ${(expense['amount'] as num).toDouble().toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           );
         },
       ),

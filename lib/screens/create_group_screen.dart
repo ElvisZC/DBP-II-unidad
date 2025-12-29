@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:math';
 
 class CreateGroupScreen extends StatefulWidget {
   const CreateGroupScreen({super.key});
@@ -11,37 +10,40 @@ class CreateGroupScreen extends StatefulWidget {
 }
 
 class _CreateGroupScreenState extends State<CreateGroupScreen> {
-  final _groupNameController = TextEditingController();
+  final _nameController = TextEditingController();
 
-  String generateJoinCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final rand = Random();
-    return List.generate(6, (index) => chars[rand.nextInt(chars.length)]).join();
+  String _generateJoinCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    return List.generate(6, (index) => chars[
+        DateTime.now().millisecondsSinceEpoch % chars.length]).join();
   }
 
   Future<void> createGroup() async {
     try {
       final user = FirebaseAuth.instance.currentUser!;
-      final joinCode = generateJoinCode();
-
       final groupRef =
           FirebaseFirestore.instance.collection('groups').doc();
 
+      final joinCode = _generateJoinCode();
+
+      // 1️⃣ Crear grupo
       await groupRef.set({
         'metadata': {
-          'name': _groupNameController.text.trim(),
-          'createdAt': FieldValue.serverTimestamp(),
-          'createdBy': user.uid,
+          'name': _nameController.text.trim(),
           'joinCode': joinCode,
+          'createdAt': Timestamp.now(),
+          'createdBy': user.uid,
         },
         'members': [user.uid],
+        'balances': {},
       });
 
+      // 2️⃣ Agregar grupo al usuario
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .update({
-        'groups': FieldValue.arrayUnion([groupRef.id])
+        'groups': FieldValue.arrayUnion([groupRef.id]),
       });
 
       if (!mounted) return;
@@ -52,8 +54,11 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
       Navigator.pop(context);
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     }
   }
 
@@ -66,8 +71,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         child: Column(
           children: [
             TextField(
-              controller: _groupNameController,
-              decoration: const InputDecoration(labelText: 'Nombre del grupo'),
+              controller: _nameController,
+              decoration:
+                  const InputDecoration(labelText: 'Nombre del grupo'),
             ),
             const SizedBox(height: 20),
             ElevatedButton(

@@ -1,38 +1,68 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class BalanceService {
-  static Future<void> calculateGroupBalances(String groupId) async {
-    final firestore = FirebaseFirestore.instance;
-
-    final expensesSnapshot = await firestore
+  static Future<void> recalculateBalances(String groupId) async {
+    final expensesSnapshot = await FirebaseFirestore.instance
         .collection('groups')
         .doc(groupId)
         .collection('expenses')
         .get();
 
-    Map<String, Map<String, double>> debts = {};
+    if (expensesSnapshot.docs.isEmpty) return;
+
+    final Map<String, double> paid = {};
+    final Map<String, double> consumed = {};
 
     for (var doc in expensesSnapshot.docs) {
       final data = doc.data();
-
-      final double amount = data['amount'];
+      final double amount = (data['amount'] as num).toDouble();
       final String paidBy = data['paidBy'];
       final List involved = data['involvedUsers'];
 
+      paid[paidBy] = (paid[paidBy] ?? 0) + amount;
+
       final double share = amount / involved.length;
-
-      for (String userId in involved) {
-        if (userId == paidBy) continue;
-
-        debts.putIfAbsent(userId, () => {});
-        debts[userId]![paidBy] =
-            (debts[userId]![paidBy] ?? 0) + share;
+      for (var userId in involved) {
+        consumed[userId] = (consumed[userId] ?? 0) + share;
       }
     }
 
-    await firestore
+    final Map<String, double> net = {};
+
+    for (var userId in {...paid.keys, ...consumed.keys}) {
+      net[userId] = (paid[userId] ?? 0) - (consumed[userId] ?? 0);
+    }
+
+    final Map<String, Map<String, double>> debts = {};
+
+    final debtors = net.entries.where((e) => e.value < 0).toList();
+    final creditors = net.entries.where((e) => e.value > 0).toList();
+
+    for (var d in debtors) {
+      double debt = -d.value;
+
+      for (var c in creditors) {
+        if (debt == 0) break;
+        if (c.value <= 0) continue;
+
+        final double pay = debt < c.value ? debt : c.value;
+
+        debts.putIfAbsent(d.key, () => {});
+        debts[d.key]![c.key] =
+            ((debts[d.key]![c.key] ?? 0) + pay);
+
+        debt -= pay;
+        c = MapEntry(c.key, c.value - pay);
+      }
+    }
+
+    await FirebaseFirestore.instance
         .collection('balances')
         .doc(groupId)
-        .set({'debts': debts});
+        .set({
+      'groupId': groupId,
+      'debts': debts,
+      'updatedAt': Timestamp.now(),
+    });
   }
 }

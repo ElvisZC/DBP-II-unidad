@@ -5,7 +5,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 class AddExpenseScreen extends StatefulWidget {
   final String groupId;
 
-  const AddExpenseScreen({super.key, required this.groupId});
+  const AddExpenseScreen({
+    super.key,
+    required this.groupId,
+  });
 
   @override
   State<AddExpenseScreen> createState() => _AddExpenseScreenState();
@@ -17,7 +20,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
 
   Future<void> addExpense() async {
     final user = FirebaseAuth.instance.currentUser!;
-    final amount = double.tryParse(_amountController.text.trim());
+    final double? amount =
+        double.tryParse(_amountController.text.trim());
 
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -31,14 +35,13 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         .doc(user.uid)
         .get();
 
-    final userName = userDoc['name'];
+    final String userName = userDoc['name'];
 
-    // Guardar gasto
-    await FirebaseFirestore.instance
-        .collection('groups')
-        .doc(widget.groupId)
-        .collection('expenses')
-        .add({
+    final groupRef =
+        FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
+
+    // 1️⃣ Guardar gasto
+    await groupRef.collection('expenses').add({
       'description': _descriptionController.text.trim(),
       'amount': amount,
       'paidBy': user.uid,
@@ -46,74 +49,73 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       'createdAt': Timestamp.now(),
     });
 
-    // Recalcular balances
-    await _recalculateBalances();
+    // 2️⃣ Recalcular balances
+    await _recalculateBalances(groupRef);
 
-    Navigator.pop(context);
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
-  Future<void> _recalculateBalances() async {
-    final groupRef =
-        FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
-
+  Future<void> _recalculateBalances(DocumentReference groupRef) async {
     final groupDoc = await groupRef.get();
-    final members = List<String>.from(groupDoc['members']);
+    final List<String> members =
+        List<String>.from(groupDoc['members']);
 
-    // Inicializar pagos
+    // Pagos por miembro
     final Map<String, double> paid = {
-      for (var m in members) m: 0.0,
+      for (final m in members) m: 0.0,
     };
 
-    // Obtener gastos
-    final expensesSnap =
-        await groupRef.collection('expenses').get();
+    final expensesSnap = await groupRef.collection('expenses').get();
+    double total = 0.0;
 
-    double total = 0;
-
-    for (var doc in expensesSnap.docs) {
+    for (final doc in expensesSnap.docs) {
       final data = doc.data();
-      final amount = (data['amount'] as num).toDouble();
-      final payer = data['paidBy'];
+      final double amount = (data['amount'] as num).toDouble();
+      final String payer = data['paidBy'];
 
       paid[payer] = paid[payer]! + amount;
       total += amount;
     }
 
-    final perPerson = total / members.length;
+    if (total == 0) {
+      await groupRef.update({'balances': {}});
+      return;
+    }
 
-    // Calcular balances individuales
+    final double perPerson = total / members.length;
+
+    // Balance individual
     final Map<String, double> balance = {};
-    for (var m in members) {
+    for (final m in members) {
       balance[m] = paid[m]! - perPerson;
     }
 
-    // Generar deudas
+    // Deudas finales
     final Map<String, double> debts = {};
 
-    for (var debtor in members) {
-      for (var creditor in members) {
+    for (final debtor in members) {
+      for (final creditor in members) {
         if (balance[debtor]! < 0 && balance[creditor]! > 0) {
-          final double amount = (-balance[debtor]!)
-              .clamp(0, balance[creditor]!)
-              .toDouble();
+          final double debt =
+              (-balance[debtor]! < balance[creditor]!)
+                  ? -balance[debtor]!
+                  : balance[creditor]!;
 
-          if (amount > 0) {
-            debts['${debtor}_$creditor'] = amount;
-
-            balance[debtor] = balance[debtor]! + amount;
-            balance[creditor] = balance[creditor]! - amount;
+          if (debt > 0.01) {
+            debts['${debtor}_$creditor'] = debt;
+            balance[debtor] = balance[debtor]! + debt;
+            balance[creditor] = balance[creditor]! - debt;
           }
         }
       }
     }
 
-    // Guardar balances
-    await FirebaseFirestore.instance
-        .collection('balances')
-        .doc(widget.groupId)
-        .set({
-      'updatedAt': Timestamp.now(),
-      'debts': debts,
+    // 3️⃣ Guardar balances dentro del grupo
+    await groupRef.update({
+      'balances': debts,
+      'balancesUpdatedAt': Timestamp.now(),
     });
   }
 
@@ -127,7 +129,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           children: [
             TextField(
               controller: _descriptionController,
-              decoration: const InputDecoration(labelText: 'Descripción'),
+              decoration:
+                  const InputDecoration(labelText: 'Descripción'),
             ),
             TextField(
               controller: _amountController,

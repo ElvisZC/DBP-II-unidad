@@ -29,9 +29,10 @@ class HomeScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () => logout(context),
-          )
+          ),
         ],
       ),
+
       floatingActionButton: FloatingActionButton(
         child: const Icon(Icons.add),
         onPressed: () {
@@ -84,17 +85,25 @@ class HomeScreen extends StatelessWidget {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final userData = userSnapshot.data!.data() as Map<String, dynamic>;
-          final List groups = userData['groups'] ?? [];
+          if (!userSnapshot.data!.exists ||
+              userSnapshot.data!.data() == null) {
+            return const Center(child: Text('Usuario no encontrado'));
+          }
+
+          final userData =
+              userSnapshot.data!.data() as Map<String, dynamic>;
+          final List<dynamic> groups = userData['groups'] ?? [];
 
           if (groups.isEmpty) {
-            return const Center(child: Text('No perteneces a ningún grupo'));
+            return const Center(
+              child: Text('No perteneces a ningún grupo'),
+            );
           }
 
           return ListView.builder(
             itemCount: groups.length,
             itemBuilder: (context, index) {
-              final groupId = groups[index];
+              final String groupId = groups[index];
 
               return StreamBuilder<DocumentSnapshot>(
                 stream: FirebaseFirestore.instance
@@ -103,17 +112,28 @@ class HomeScreen extends StatelessWidget {
                     .snapshots(),
                 builder: (context, groupSnapshot) {
                   if (!groupSnapshot.hasData) {
-                    return const ListTile(title: Text('Cargando grupo...'));
+                    return const ListTile(
+                      title: Text('Cargando grupo...'),
+                    );
+                  }
+
+                  if (!groupSnapshot.data!.exists ||
+                      groupSnapshot.data!.data() == null) {
+                    return const ListTile(
+                      title: Text('Grupo no encontrado'),
+                    );
                   }
 
                   final groupData =
                       groupSnapshot.data!.data() as Map<String, dynamic>;
-                  final metadata = groupData['metadata'];
+                  final metadata =
+                      Map<String, dynamic>.from(groupData['metadata']);
 
                   return ListTile(
                     leading: const Icon(Icons.group),
                     title: Text(metadata['name']),
-                    subtitle: Text('Código: ${metadata['joinCode']}'),
+                    subtitle:
+                        Text('Código: ${metadata['joinCode']}'),
                     onTap: () {
                       Navigator.push(
                         context,

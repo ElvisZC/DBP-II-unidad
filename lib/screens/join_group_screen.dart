@@ -15,7 +15,7 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
   Future<void> joinGroup() async {
     try {
       final user = FirebaseAuth.instance.currentUser!;
-      final code = _codeController.text.trim().toUpperCase();
+      final code = _codeController.text.trim();
 
       final query = await FirebaseFirestore.instance
           .collection('groups')
@@ -27,31 +27,37 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
       }
 
       final groupDoc = query.docs.first;
+      final groupId = groupDoc.id;
 
+      // 1️⃣ Agregar usuario al grupo
       await FirebaseFirestore.instance
           .collection('groups')
-          .doc(groupDoc.id)
+          .doc(groupId)
           .update({
-        'members': FieldValue.arrayUnion([user.uid])
+        'members': FieldValue.arrayUnion([user.uid]),
       });
 
+      // 2️⃣ Agregar grupo al usuario
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .update({
-        'groups': FieldValue.arrayUnion([groupDoc.id])
+        'groups': FieldValue.arrayUnion([groupId]),
       });
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Te uniste al grupo')),
+        const SnackBar(content: Text('Unido al grupo correctamente')),
       );
 
       Navigator.pop(context);
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     }
   }
 

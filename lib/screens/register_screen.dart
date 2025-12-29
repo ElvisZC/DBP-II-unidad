@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'home_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -16,16 +17,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Future<void> registerUser() async {
     try {
-      print("⏳ Iniciando registro...");
-
       // Crear usuario en Firebase Auth
       UserCredential userCredential =
           await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-
-      print("✅ Usuario creado en Auth: ${userCredential.user!.uid}");
 
       // Guardar perfil en Firestore
       await FirebaseFirestore.instance
@@ -38,16 +35,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      print("🔥 Usuario guardado en Firestore correctamente");
-
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Usuario creado correctamente')),
+      // 🔥 REDIRECCIÓN CORRECTA
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        (route) => false,
       );
     } catch (e) {
-      print("❌ ERROR durante registro: $e");
-
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
