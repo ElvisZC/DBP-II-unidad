@@ -15,32 +15,113 @@ class GroupDetailScreen extends StatelessWidget {
             .collection('groups')
             .doc(groupId)
             .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
+        builder: (context, groupSnapshot) {
+          if (!groupSnapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final groupData = snapshot.data!.data() as Map<String, dynamic>;
+          final groupData =
+              groupSnapshot.data!.data() as Map<String, dynamic>;
           final metadata = groupData['metadata'];
 
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  metadata['name'],
-                  style: Theme.of(context).textTheme.headlineMedium,
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      metadata['name'],
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text('Código: ${metadata['joinCode']}'),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                Text('Código del grupo: ${metadata['joinCode']}'),
-                const SizedBox(height: 24),
-                const Text(
-                  'Gastos (próximamente)',
-                  style: TextStyle(fontSize: 18),
+              ),
+
+              const Divider(),
+
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  'Balances',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-              ],
-            ),
+              ),
+
+              Expanded(
+                child: StreamBuilder<DocumentSnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('groups')
+                      .doc(groupId)
+                      .collection('balances')
+                      .doc('current')
+                      .snapshots(),
+                  builder: (context, balanceSnapshot) {
+                    if (!balanceSnapshot.hasData ||
+                        !balanceSnapshot.data!.exists) {
+                      return const Center(
+                          child: Text('Sin balances aún'));
+                    }
+
+                    final balanceData =
+                        balanceSnapshot.data!.data() as Map<String, dynamic>;
+                    final Map<String, dynamic> debts =
+                        balanceData['debts'] ?? {};
+
+                    if (debts.isEmpty) {
+                      return const Center(
+                          child: Text('Todos están saldados'));
+                    }
+
+                    return ListView(
+                      children: debts.entries.map((entry) {
+                        final ids = entry.key.split('_');
+                        final debtorId = ids[0];
+                        final creditorId = ids[1];
+                        final amount = entry.value;
+
+                        return FutureBuilder<List<DocumentSnapshot>>(
+                          future: Future.wait([
+                            FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(debtorId)
+                                .get(),
+                            FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(creditorId)
+                                .get(),
+                          ]),
+                          builder: (context, userSnapshot) {
+                            if (!userSnapshot.hasData) {
+                              return const ListTile(
+                                  title: Text('Cargando...'));
+                            }
+
+                            final debtorName =
+                                userSnapshot.data![0]['name'];
+                            final creditorName =
+                                userSnapshot.data![1]['name'];
+
+                            return ListTile(
+                              leading:
+                                  const Icon(Icons.account_balance_wallet),
+                              title: Text(
+                                  '$debtorName debe S/ ${amount.toStringAsFixed(2)}'),
+                              subtitle:
+                                  Text('a $creditorName'),
+                            );
+                          },
+                        );
+                      }).toList(),
+                    );
+                  },
+                ),
+              ),
+            ],
           );
         },
       ),

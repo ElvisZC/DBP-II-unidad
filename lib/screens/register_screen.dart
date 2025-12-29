@@ -18,7 +18,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     try {
       print("⏳ Iniciando registro...");
 
-      // 1️⃣ Crear usuario en Firebase Auth
+      // Crear usuario en Firebase Auth
       UserCredential userCredential =
           await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
@@ -27,7 +27,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       print("✅ Usuario creado en Auth: ${userCredential.user!.uid}");
 
-      // 2️⃣ Guardar perfil en Firestore
+      // Guardar perfil en Firestore
       await FirebaseFirestore.instance
           .collection('users')
           .doc(userCredential.user!.uid)
