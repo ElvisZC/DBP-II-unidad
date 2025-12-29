@@ -35,7 +35,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         .doc(user.uid)
         .get();
 
-    final String userName = userDoc['name'];
+    if (!userDoc.exists) return;
+
+    final String userName = userDoc.data()!['name'];
 
     final groupRef =
         FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
@@ -50,72 +52,76 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     });
 
     // 2️⃣ Recalcular balances
-    await _recalculateBalances(groupRef);
+    await _recalculateBalances();
 
-    if (mounted) {
-      Navigator.pop(context);
-    }
+    if (!mounted) return;
+    Navigator.pop(context);
   }
 
-  Future<void> _recalculateBalances(DocumentReference groupRef) async {
-    final groupDoc = await groupRef.get();
-    final List<String> members =
-        List<String>.from(groupDoc['members']);
+  Future<void> _recalculateBalances() async {
+    final groupRef =
+        FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
 
-    // Pagos por miembro
+    final groupDoc = await groupRef.get();
+    if (!groupDoc.exists) return;
+
+    final data = groupDoc.data()!;
+    final metadata =
+        Map<String, dynamic>.from(data['metadata'] ?? {});
+    final membersMap =
+        Map<String, dynamic>.from(metadata['members'] ?? {});
+
+    final members = membersMap.keys.toList();
+    if (members.isEmpty) return;
+
+    // Inicializar pagos
     final Map<String, double> paid = {
-      for (final m in members) m: 0.0,
+      for (var m in members) m: 0.0,
     };
 
     final expensesSnap = await groupRef.collection('expenses').get();
     double total = 0.0;
 
-    for (final doc in expensesSnap.docs) {
-      final data = doc.data();
-      final double amount = (data['amount'] as num).toDouble();
-      final String payer = data['paidBy'];
+    for (var doc in expensesSnap.docs) {
+      final expense = doc.data();
+      final double amount =
+          (expense['amount'] as num).toDouble();
+      final String payer = expense['paidBy'];
 
-      paid[payer] = paid[payer]! + amount;
+      if (paid.containsKey(payer)) {
+        paid[payer] = paid[payer]! + amount;
+      }
+
       total += amount;
-    }
-
-    if (total == 0) {
-      await groupRef.update({'balances': {}});
-      return;
     }
 
     final double perPerson = total / members.length;
 
-    // Balance individual
-    final Map<String, double> balance = {};
-    for (final m in members) {
-      balance[m] = paid[m]! - perPerson;
-    }
+    final Map<String, double> balance = {
+      for (var m in members) m: paid[m]! - perPerson,
+    };
 
-    // Deudas finales
     final Map<String, double> debts = {};
 
-    for (final debtor in members) {
-      for (final creditor in members) {
+    for (var debtor in members) {
+      for (var creditor in members) {
         if (balance[debtor]! < 0 && balance[creditor]! > 0) {
-          final double debt =
-              (-balance[debtor]! < balance[creditor]!)
-                  ? -balance[debtor]!
-                  : balance[creditor]!;
+          final double debtAmount =
+              (-balance[debtor]!).clamp(0.0, balance[creditor]!);
 
-          if (debt > 0.01) {
-            debts['${debtor}_$creditor'] = debt;
-            balance[debtor] = balance[debtor]! + debt;
-            balance[creditor] = balance[creditor]! - debt;
+          if (debtAmount > 0) {
+            debts['${debtor}_$creditor'] = debtAmount;
+            balance[debtor] = balance[debtor]! + debtAmount;
+            balance[creditor] = balance[creditor]! - debtAmount;
           }
         }
       }
     }
 
-    // 3️⃣ Guardar balances dentro del grupo
+    // 3️⃣ Guardar balances EN EL GRUPO
     await groupRef.update({
       'balances': debts,
-      'balancesUpdatedAt': Timestamp.now(),
+      'balancesUpdatedAt': FieldValue.serverTimestamp(),
     });
   }
 
@@ -134,8 +140,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
             ),
             TextField(
               controller: _amountController,
-              decoration: const InputDecoration(labelText: 'Monto'),
-              keyboardType: TextInputType.number,
+              decoration:
+                  const InputDecoration(labelText: 'Monto'),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
             ),
             const SizedBox(height: 20),
             ElevatedButton(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'add_expense_screen.dart';
 
 class GroupDetailScreen extends StatelessWidget {
   final String groupId;
@@ -12,6 +13,19 @@ class GroupDetailScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Detalle del grupo'),
       ),
+
+      floatingActionButton: FloatingActionButton(
+        child: const Icon(Icons.add),
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AddExpenseScreen(groupId: groupId),
+            ),
+          );
+        },
+      ),
+
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
             .collection('groups')
@@ -25,12 +39,6 @@ class GroupDetailScreen extends StatelessWidget {
           final groupData =
               snapshot.data!.data() as Map<String, dynamic>;
 
-          if (!groupData.containsKey('metadata')) {
-            return const Center(
-              child: Text('Estructura del grupo inválida'),
-            );
-          }
-
           final metadata =
               Map<String, dynamic>.from(groupData['metadata'] ?? {});
           final membersMap =
@@ -43,14 +51,14 @@ class GroupDetailScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Nombre del grupo
+                // ================= NOMBRE =================
                 Text(
                   metadata['name'] ?? 'Grupo',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
+
                 const SizedBox(height: 8),
 
-                // Código del grupo
                 Text(
                   'Código del grupo: ${metadata['joinCode'] ?? '-'}',
                   style: const TextStyle(color: Colors.grey),
@@ -66,6 +74,7 @@ class GroupDetailScreen extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+
                 const SizedBox(height: 8),
 
                 if (balances.isEmpty)
@@ -79,21 +88,26 @@ class GroupDetailScreen extends StatelessWidget {
                   Column(
                     children: balances.entries.map((entry) {
                       final parts = entry.key.split('_');
+                      if (parts.length != 2) {
+                        return const SizedBox();
+                      }
+
                       final debtorId = parts[0];
                       final creditorId = parts[1];
                       final amount =
                           (entry.value as num).toDouble();
 
                       final debtorName =
-                          membersMap[debtorId] ?? 'Usuario';
+                          membersMap[debtorId] ?? debtorId;
                       final creditorName =
-                          membersMap[creditorId] ?? 'Usuario';
+                          membersMap[creditorId] ?? creditorId;
 
                       return Card(
                         child: ListTile(
-                          leading: const Icon(Icons.swap_horiz),
+                          leading:
+                              const Icon(Icons.compare_arrows),
                           title:
-                              Text('$debtorName → $creditorName'),
+                              Text('$debtorName debe a $creditorName'),
                           trailing: Text(
                             'S/ ${amount.toStringAsFixed(2)}',
                             style: const TextStyle(
@@ -116,6 +130,7 @@ class GroupDetailScreen extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+
                 const SizedBox(height: 8),
 
                 Expanded(
