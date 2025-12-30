@@ -20,6 +20,81 @@ class GroupDetailScreen extends StatefulWidget {
 class _GroupDetailScreenState extends State<GroupDetailScreen> {
   final currentUser = FirebaseAuth.instance.currentUser;
 
+  // Recalcular Balances
+  Future<void> _recalculateBalances() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Recalculando balances... por favor espera')),
+    );
+
+    try {
+      final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        // 1. Obtener datos del grupo y miembros
+        final groupSnapshot = await transaction.get(groupRef);
+        if (!groupSnapshot.exists) throw Exception("Grupo no encontrado");
+
+        final groupData = groupSnapshot.data() as Map<String, dynamic>;
+        final members = List<String>.from(groupData['members'] ?? []);
+
+        if (members.isEmpty) return;
+
+        // 2. Obtener TODOS los gastos de la subcolección para sumar de nuevo
+        final expensesSnapshot = await groupRef.collection('expenses').get();
+
+        // 3. Reiniciar balances a 0 para todos
+        Map<String, double> newBalances = {};
+        for (var m in members) {
+          newBalances[m] = 0.0;
+        }
+
+        double totalExpenses = 0.0;
+
+        // 4. Recorrer cada gasto y aplicar la matemática
+        for (var doc in expensesSnapshot.docs) {
+          final data = doc.data();
+          final double amount = (data['amount'] as num).toDouble();
+          final String payerId = data['paidBy'];
+
+          totalExpenses += amount;
+          final double sharePerPerson = amount / members.length;
+
+          for (var memberId in members) {
+            double current = newBalances[memberId] ?? 0.0;
+            if (memberId == payerId) {
+              current += (amount - sharePerPerson);
+            } else {
+              current -= sharePerPerson;
+            }
+            newBalances[memberId] = current;
+          }
+        }
+
+        // 5. Redondeo final a 2 decimales
+        newBalances.forEach((key, value) {
+          newBalances[key] = double.parse(value.toStringAsFixed(2));
+        });
+
+        // 6. Guardar los nuevos balances limpios
+        transaction.update(groupRef, {
+          'balances': newBalances,
+          'totalExpenses': totalExpenses,
+          'lastActivityAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('¡Balances corregidos correctamente!'), backgroundColor: Colors.green),
+      );
+
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al recalcular: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
   // Función para mostrar el recibo en un diálogo con zoom
   void _showReceiptDialog(BuildContext context, String imageUrl, String description) {
     showDialog(
@@ -40,8 +115,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               foregroundColor: Colors.black,
             ),
             SizedBox(
-              height: 400, // Altura fija para la imagen
-              child: InteractiveViewer( // Permite hacer zoom con los dedos
+              height: 400,
+              child: InteractiveViewer(
                 panEnabled: true,
                 boundaryMargin: const EdgeInsets.all(20),
                 minScale: 0.5,
@@ -70,13 +145,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 
-  // Widget para construir la sección de Balances en tiempo real
+  // Widget para construir la sección de Balances
   Widget _buildBalancesSection(Map<String, dynamic> balances, Map<String, String> memberNames) {
     final myBalance = (balances[currentUser?.uid] as num?)?.toDouble() ?? 0.0;
 
     List<Widget> balanceWidgets = [];
 
-    // 1. Mi resumen personal
+    // Mi resumen personal
     Color statusColor;
     String statusText;
     if (myBalance > 0) {
@@ -110,29 +185,27 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     balanceWidgets.add(const Text("Detalle de Saldos:", style: TextStyle(fontWeight: FontWeight.bold)));
     balanceWidgets.add(const SizedBox(height: 8));
 
-    // 2. Lista detallada de quién debe a quién
+    // Lista detallada
     if (balances.isEmpty) {
       balanceWidgets.add(const Text("No hay deudas registradas.", style: TextStyle(fontStyle: FontStyle.italic)));
     } else {
       balances.forEach((uid, amountNum) {
-        if (uid == currentUser?.uid) return; // No mostrarme a mí mismo en la lista
+        if (uid == currentUser?.uid) return;
 
         final amount = (amountNum as num).toDouble();
         final name = memberNames[uid] ?? 'Usuario';
 
-        if (amount == 0) return; // No mostrar saldos cero
+        if (amount == 0) return;
 
         String detailText;
         Color itemColor;
         IconData itemIcon;
 
         if (amount > 0) {
-          // Saldo positivo: Esta persona LE DEBE al grupo (o a mí indirectamente)
           detailText = "$name debe ${NumberFormat.simpleCurrency().format(amount)}";
           itemColor = Colors.orange;
           itemIcon = Icons.arrow_outward;
         } else {
-          // Saldo negativo: Alguien del grupo LE DEBE a esta persona
           detailText = "Se le debe a $name: ${NumberFormat.simpleCurrency().format(amount.abs())}";
           itemColor = Colors.blueGrey;
           itemIcon = Icons.arrow_back;
@@ -161,28 +234,32 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
-    // Referencia al documento principal del grupo
     final groupDocRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
-    // Referencia a la subcolección de gastos
     final expensesQuery = groupDocRef.collection('expenses').orderBy('createdAt', descending: true);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.groupName),
         actions: [
+          // Botón de Recalcular (Refresh)
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: "Recalcular Balances",
+            onPressed: _recalculateBalances,
+          ),
+          // Botón de Info
           IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: () {
-              // Aquí podrías mostrar el código del grupo en un diálogo
+              // Lógica futura para ver código
             },
-          )
+          ),
         ],
       ),
       body: StreamBuilder<DocumentSnapshot>(
-        stream: groupDocRef.snapshots(), // Escuchamos cambios en el GRUPO (para balances)
+        stream: groupDocRef.snapshots(),
         builder: (context, groupSnapshot) {
           if (groupSnapshot.hasError) return Center(child: Text('Error: ${groupSnapshot.error}'));
           if (!groupSnapshot.hasData) return const Center(child: CircularProgressIndicator());
@@ -198,7 +275,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
           return Column(
             children: [
-              // SECCIÓN SUPERIOR: Balances (Fija)
+              // 1. SECCIÓN DE BALANCES
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: _buildBalancesSection(balances, memberNamesDummy),
@@ -206,10 +283,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
               const Divider(height: 1),
 
-              // SECCIÓN INFERIOR: Lista de Gastos (Scrollable)
+              // 2. LISTA DE GASTOS
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
-                  stream: expensesQuery.snapshots(), // Escuchamos cambios en los GASTOS
+                  stream: expensesQuery.snapshots(),
                   builder: (context, expensesSnapshot) {
                     if (expensesSnapshot.hasError) return Center(child: Text('Error: ${expensesSnapshot.error}'));
                     if (expensesSnapshot.connectionState == ConnectionState.waiting) {
@@ -222,7 +299,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       return const Center(
                         child: Padding(
                           padding: EdgeInsets.all(20.0),
-                          child: Text("Aún no hay gastos. ¡Agrega el primero!", style: TextStyle(color: Colors.grey)),
+                          child: Text("Aún no hay gastos.", style: TextStyle(color: Colors.grey)),
                         ),
                       );
                     }
@@ -257,7 +334,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                               ),
                               const SizedBox(width: 8),
-                              // EL BOTÓN DEL OJO 👁️
+                              // BOTÓN DEL OJO
                               if (receiptUrl != null && receiptUrl.isNotEmpty)
                                 IconButton(
                                   icon: const Icon(Icons.visibility, color: Colors.blue),
@@ -267,7 +344,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                               else
                                 const IconButton(
                                   icon: Icon(Icons.visibility_off, color: Colors.grey),
-                                  onPressed: null, // Deshabilitado si no hay foto
+                                  onPressed: null,
                                 ),
                             ],
                           ),
@@ -286,7 +363,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           Navigator.pushNamed(
               context,
               '/add-expense',
-              arguments: {'groupId': widget.groupId} // Pasamos el ID como argumento
+              arguments: {'groupId': widget.groupId}
           );
         },
         label: const Text('Nuevo Gasto'),
