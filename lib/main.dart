@@ -7,6 +7,7 @@ import 'screens/home_screen.dart';
 import 'screens/welcome_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
+import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,13 +25,14 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Gastos Compartidos',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueAccent),
-        useMaterial3: true,
-      ),
+
+      // AQUI CONECTAMOS EL TEMA NUEVO
+      theme: AppTheme.lightTheme,
+
+      // Tus rutas siguen igual...
       routes: {
         '/login': (context) => const LoginScreen(),
-        // '/register': (context) => const RegisterScreen(), // Descomenta si tienes registro
+        '/register': (context) => const RegisterScreen(), // (Si la tienes)
       },
       home: const AuthWrapper(),
     );
