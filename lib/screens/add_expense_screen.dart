@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart'; // Nuevo import
+import 'package:image_picker/image_picker.dart';
 
 class AddExpenseScreen extends StatefulWidget {
   final String groupId;
@@ -17,13 +20,47 @@ class AddExpenseScreen extends StatefulWidget {
 class _AddExpenseScreenState extends State<AddExpenseScreen> {
   final _descriptionController = TextEditingController();
   final _amountController = TextEditingController();
+
+  // Variables para la imagen
+  File? _selectedImage;
+  bool _isUploading = false;
   bool _isLoading = false;
 
-  // Función principal para agregar un gasto
+  // Función para seleccionar imagen (Cámara o Galería)
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final pickedImage = await picker.pickImage(source: ImageSource.camera, imageQuality: 50);
+
+    if (pickedImage != null) {
+      setState(() {
+        _selectedImage = File(pickedImage.path);
+      });
+    }
+  }
+
+  // Función para subir la imagen a Firebase Storage
+  Future<String?> _uploadImage(String expenseId) async {
+    if (_selectedImage == null) return null;
+
+    try {
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('receipts')
+          .child(widget.groupId)
+          .child('$expenseId.jpg');
+
+      await storageRef.putFile(_selectedImage!);
+      final imageUrl = await storageRef.getDownloadURL();
+      return imageUrl;
+    } catch (e) {
+      print("Error subiendo imagen: $e");
+      return null;
+    }
+  }
+
   Future<void> addExpense() async {
     if (_isLoading) return;
 
-    // Validación básica de campos vacíos
     if (_descriptionController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Por favor, ingresa una descripción')),
@@ -31,70 +68,74 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
-
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Error: Usuario no autenticado')),
-      );
-      setState(() => _isLoading = false);
-      return;
-    }
-
     final double? amount = double.tryParse(_amountController.text.trim());
-
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Por favor, ingrese un monto válido')),
       );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _isUploading = true;
+    });
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
       setState(() => _isLoading = false);
       return;
     }
 
     try {
-      // Obtener datos del usuario actual para guardar su nombre en el gasto
+      // 1. Obtener datos básicos
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final String userName = userDoc.exists ? (userDoc.data()!['name'] ?? 'Usuario') : 'Usuario';
-
       final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
 
-      // 1️⃣ Guardar el gasto en la subcolección 'expenses'
-      // Usamos .doc() vacío para generar ID automático
-      await groupRef.collection('expenses').add({
+      // 2. Generar el ID del gasto ANTES de guardar para usarlo en el nombre de la foto
+      final newExpenseDoc = groupRef.collection('expenses').doc();
+
+      // 3. Subir imagen
+      String? receiptUrl;
+      if (_selectedImage != null) {
+        receiptUrl = await _uploadImage(newExpenseDoc.id);
+      }
+
+      // 4. Guardar datos en Firestore
+      await newExpenseDoc.set({
         'description': _descriptionController.text.trim(),
-        'amount': amount, // Guardamos el valor exacto del gasto
+        'amount': amount,
         'paidBy': user.uid,
         'paidByName': userName,
-        'createdAt': FieldValue.serverTimestamp(), // Mejor usar serverTimestamp para evitar problemas de zona horaria
+        'receiptUrl': receiptUrl, // Guardamos la URL de la foto
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // 2️⃣ Actualizar los balances del grupo
+      // 5. Actualizar Balances
       await _updateBalancesIncrementally(groupRef, user.uid, amount);
 
       if (!mounted) return;
-      Navigator.pop(context); // Volver a la pantalla anterior
+      Navigator.pop(context);
 
     } on FirebaseException catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error de Firebase: ${e.message}')),
+        SnackBar(content: Text('Error: ${e.message}')),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ocurrió un error: $e')),
+        SnackBar(content: Text('Error: $e')),
       );
     } finally {
       if (mounted) {
         setState(() {
           _isLoading = false;
+          _isUploading = false;
         });
       }
     }
   }
 
-  // Lógica matemática para dividir la deuda
   Future<void> _updateBalancesIncrementally(DocumentReference groupRef, String payerId, double newExpenseAmount) async {
     return FirebaseFirestore.instance.runTransaction((transaction) async {
       final groupSnapshot = await transaction.get(groupRef);
@@ -102,34 +143,21 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
 
       final groupData = groupSnapshot.data() as Map<String, dynamic>;
       final members = List<String>.from(groupData['members'] ?? []);
-
-      if (members.isEmpty) throw Exception("El grupo no tiene miembros.");
-
-      // Leemos los balances actuales (o creamos un mapa vacío si es el primer gasto)
       final Map<String, double> currentBalances = (groupData['balances'] as Map<String, dynamic>?)
           ?.map((key, value) => MapEntry(key, (value as num).toDouble())) ?? {};
 
-      // División equitativa
       final double sharePerPerson = newExpenseAmount / members.length;
 
       for (final memberId in members) {
         double currentBalance = currentBalances[memberId] ?? 0.0;
-
         if (memberId == payerId) {
-          // EL QUE PAGÓ: Recupera su dinero (Gasto total) menos su propia parte (share)
-          // Ejemplo: Pagó 100, son 4. Le deben 75. (100 - 25 = +75)
           currentBalance += (newExpenseAmount - sharePerPerson);
         } else {
-          // LOS DEMÁS: Deben su parte.
-          // Ejemplo: Deben 25. Balance = -25.
           currentBalance -= sharePerPerson;
         }
-
-        // REDONDEO IMPORTANTE: Guardar solo 2 decimales para evitar 33.3333333
         currentBalances[memberId] = double.parse(currentBalance.toStringAsFixed(2));
       }
 
-      // Actualizamos el documento del grupo
       transaction.update(groupRef, {
         'balances': currentBalances,
         'totalExpenses': FieldValue.increment(newExpenseAmount),
@@ -141,16 +169,42 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Registrar Gasto')),
-      body: Padding(
+      appBar: AppBar(title: const Text('Registrar Gasto con Foto')),
+      body: SingleChildScrollView( // Añadido Scroll por si el teclado tapa campos
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // ÁREA DE LA FOTO
+            GestureDetector(
+              onTap: _pickImage,
+              child: Container(
+                height: 150,
+                decoration: BoxDecoration(
+                  color: Colors.grey[200],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey),
+                ),
+                child: _selectedImage != null
+                    ? ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.file(_selectedImage!, fit: BoxFit.cover),
+                )
+                    : Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: const [
+                    Icon(Icons.camera_alt, size: 40, color: Colors.grey),
+                    Text("Tocar para tomar foto del recibo", style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
             TextField(
               controller: _descriptionController,
               decoration: const InputDecoration(
-                labelText: 'Concepto (Ej. Cena, Taxi)',
+                labelText: 'Concepto',
                 prefixIcon: Icon(Icons.description),
                 border: OutlineInputBorder(),
               ),
@@ -168,12 +222,15 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
               enabled: !_isLoading,
             ),
             const SizedBox(height: 24),
+
             ElevatedButton.icon(
               onPressed: _isLoading ? null : addExpense,
               icon: _isLoading
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.save),
-              label: Text(_isLoading ? 'Guardando...' : 'Guardar Gasto'),
+              label: Text(_isLoading
+                  ? (_isUploading ? 'Subiendo foto...' : 'Guardando...')
+                  : 'Guardar Gasto'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 textStyle: const TextStyle(fontSize: 18),

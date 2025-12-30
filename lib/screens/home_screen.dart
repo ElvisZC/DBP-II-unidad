@@ -1,17 +1,24 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-import 'login_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'create_group_screen.dart';
 import 'join_group_screen.dart';
 import 'group_detail_screen.dart';
+import 'login_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
-  Future<void> logout(BuildContext context) async {
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final user = FirebaseAuth.instance.currentUser;
+
+  void _logout() async {
     await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -20,135 +27,113 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser!;
-
+    // Escuchamos los cambios en el documento del USUARIO para ver sus grupos
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Mis grupos'),
+        title: const Text('Mis Grupos'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => logout(context),
-          ),
+          IconButton(onPressed: _logout, icon: const Icon(Icons.exit_to_app))
         ],
       ),
-
-      floatingActionButton: FloatingActionButton(
-        child: const Icon(Icons.add),
-        onPressed: () {
-          showModalBottomSheet(
-            context: context,
-            builder: (_) => SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.group_add),
-                    title: const Text('Crear grupo'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const CreateGroupScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.login),
-                    title: const Text('Unirse a grupo'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const JoinGroupScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-
       body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .snapshots(),
-        builder: (context, userSnapshot) {
-          if (!userSnapshot.hasData) {
+        stream: FirebaseFirestore.instance.collection('users').doc(user!.uid).snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return const Center(child: Text('Error al cargar perfil'));
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (!userSnapshot.data!.exists ||
-              userSnapshot.data!.data() == null) {
+          if (!snapshot.hasData || !snapshot.data!.exists) {
             return const Center(child: Text('Usuario no encontrado'));
           }
 
-          final userData =
-              userSnapshot.data!.data() as Map<String, dynamic>;
-          final List<dynamic> groups = userData['groups'] ?? [];
+          final userData = snapshot.data!.data() as Map<String, dynamic>;
+          // Obtenemos la lista de IDs de grupos donde está el usuario
+          final List<dynamic> groupIds = userData['groups'] ?? [];
 
-          if (groups.isEmpty) {
-            return const Center(
-              child: Text('No perteneces a ningún grupo'),
+          if (groupIds.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  Icon(Icons.group_off, size: 60, color: Colors.grey),
+                  SizedBox(height: 10),
+                  Text("No tienes grupos aún."),
+                ],
+              ),
             );
           }
 
           return ListView.builder(
-            itemCount: groups.length,
+            itemCount: groupIds.length,
+            padding: const EdgeInsets.all(8),
             itemBuilder: (context, index) {
-              final String groupId = groups[index];
+              final groupId = groupIds[index];
 
+              // Por cada ID, buscamos la info del grupo en tiempo real
               return StreamBuilder<DocumentSnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('groups')
-                    .doc(groupId)
-                    .snapshots(),
-                builder: (context, groupSnapshot) {
-                  if (!groupSnapshot.hasData) {
-                    return const ListTile(
-                      title: Text('Cargando grupo...'),
-                    );
-                  }
+                stream: FirebaseFirestore.instance.collection('groups').doc(groupId).snapshots(),
+                builder: (ctx, groupSnap) {
+                  if (!groupSnap.hasData) return const SizedBox.shrink(); // Cargando silencioso
 
-                  if (!groupSnapshot.data!.exists ||
-                      groupSnapshot.data!.data() == null) {
-                    return const ListTile(
-                      title: Text('Grupo no encontrado'),
-                    );
-                  }
+                  final groupData = groupSnap.data!.data() as Map<String, dynamic>?;
+                  if (groupData == null) return const SizedBox.shrink(); // Grupo borrado o error
 
-                  final groupData =
-                      groupSnapshot.data!.data() as Map<String, dynamic>;
-                  final metadata =
-                      Map<String, dynamic>.from(groupData['metadata']);
+                  final metadata = groupData['metadata'] as Map<String, dynamic>? ?? {};
+                  final name = metadata['name'] ?? 'Grupo sin nombre';
+                  final code = metadata['joinCode'] ?? '---';
 
-                  return ListTile(
-                    leading: const Icon(Icons.group),
-                    title: Text(metadata['name']),
-                    subtitle:
-                        Text('Código: ${metadata['joinCode']}'),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              GroupDetailScreen(groupId: groupId),
-                        ),
-                      );
-                    },
+                  return Card(
+                    margin: const EdgeInsets.symmetric(vertical: 5),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.blueAccent,
+                        child: Text(name.substring(0, 1).toUpperCase(), style: const TextStyle(color: Colors.white)),
+                      ),
+                      title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text('Código: $code'),
+                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                      onTap: () {
+
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => GroupDetailScreen(
+                              groupId: groupId,
+                              groupName: name, // Enviamos el nombre recuperado
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   );
                 },
               );
             },
           );
         },
+      ),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            heroTag: "join",
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const JoinGroupScreen()));
+            },
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.blue,
+            child: const Icon(Icons.group_add),
+          ),
+          const SizedBox(height: 10),
+          FloatingActionButton(
+            heroTag: "create",
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateGroupScreen()));
+            },
+            child: const Icon(Icons.add),
+          ),
+        ],
       ),
     );
   }
