@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/services.dart';
 import 'settle_debt_screen.dart';
+import 'add_expense_screen.dart';
+
 class GroupDetailScreen extends StatefulWidget {
   final String groupId;
   final String groupName;
@@ -20,7 +23,19 @@ class GroupDetailScreen extends StatefulWidget {
 class _GroupDetailScreenState extends State<GroupDetailScreen> {
   final currentUser = FirebaseAuth.instance.currentUser;
 
-  // 1. LÓGICA: Confirmar un pago recibido
+  // Mapa maestro de iconos
+  final Map<String, IconData> _categoryIcons = {
+    'Comida': Icons.restaurant,
+    'Transporte': Icons.directions_bus,
+    'Hospedaje': Icons.hotel,
+    'Entretenimiento': Icons.movie,
+    'Supermercado': Icons.shopping_cart,
+    'Salud': Icons.local_hospital,
+    'Servicios': Icons.lightbulb,
+    'Otros': Icons.receipt,
+  };
+
+  //1. LÓGICA: Confirmar un pago recibido
   Future<void> _confirmPayment(String settlementId, String fromUid, double amount) async {
     try {
       final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
@@ -36,7 +51,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         double balancePayer = currentBalances[fromUid] ?? 0.0;
         double balanceReceiver = currentBalances[currentUser!.uid] ?? 0.0;
 
-        // Ajustamos los balances (El que pagó sube, el que recibió baja)
+        // Ajustamos balances
         currentBalances[fromUid] = double.parse((balancePayer + amount).toStringAsFixed(2));
         currentBalances[currentUser!.uid] = double.parse((balanceReceiver - amount).toStringAsFixed(2));
 
@@ -55,7 +70,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }
   }
 
-  //2. LÓGICA: Recalcular Balances (Emergencia)
+  //2. LÓGICA: Recalcular Balances
   Future<void> _recalculateBalances() async {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Recalculando...')));
 
@@ -70,7 +85,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         if (members.isEmpty) return;
 
         final expensesSnapshot = await groupRef.collection('expenses').get();
-        // Solo contamos pagos CONFIRMADOS para el recalculo
         final settlementsSnapshot = await groupRef.collection('settlements').where('status', isEqualTo: 'confirmed').get();
 
         Map<String, double> newBalances = {};
@@ -78,7 +92,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
         double totalExpenses = 0.0;
 
-        // Sumar Gastos (Deudas)
+        // Sumar Gastos
         for (var doc in expensesSnapshot.docs) {
           final data = doc.data();
           final double amount = (data['amount'] as num).toDouble();
@@ -94,7 +108,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           }
         }
 
-        // Sumar Pagos (Abonos)
+        // Sumar Pagos Confirmados
         for (var doc in settlementsSnapshot.docs) {
           final data = doc.data();
           final double amount = (data['amount'] as num).toDouble();
@@ -120,7 +134,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }
   }
 
-  // 3.UI: Diálogo del Recibo
+  //3. UI: Diálogo del Recibo
   void _showReceiptDialog(BuildContext context, String imageUrl, String description) {
     showDialog(
       context: context,
@@ -147,6 +161,63 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 
+  // 4. UI: Mostrar Info del Grupo y Copiar Código
+  void _showGroupInfo() async {
+    final groupDoc = await FirebaseFirestore.instance.collection('groups').doc(widget.groupId).get();
+    final data = groupDoc.data();
+    final joinCode = data?['metadata']?['joinCode'] ?? 'Error';
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Invitar Amigos"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Comparte este código para que otros se unan a tu viaje:"),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue),
+              ),
+              child: Text(
+                joinCode,
+                style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2,
+                    color: Colors.blueAccent
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: joinCode));
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('¡Código copiado al portapapeles!'), backgroundColor: Colors.green),
+              );
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text("Copiar"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cerrar"),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
@@ -160,12 +231,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             onPressed: _recalculateBalances,
             tooltip: 'Recalcular',
           ),
+          // Botón de INFO (Ver Código)
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            onPressed: _showGroupInfo,
+            tooltip: 'Ver código de grupo',
+          ),
         ],
       ),
       body: StreamBuilder<DocumentSnapshot>(
         stream: groupRef.snapshots(),
         builder: (context, snapshot) {
-          // Manejo de carga y errores
           if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
           if (!snapshot.data!.exists) return const Center(child: Text('El grupo no existe'));
@@ -176,7 +252,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
           return Column(
             children: [
-              // SECCIÓN A: Notificaciones de pago
+              // 1. Notificaciones de Pagos
               StreamBuilder<QuerySnapshot>(
                 stream: groupRef.collection('settlements')
                     .where('toUid', isEqualTo: currentUser?.uid)
@@ -204,7 +280,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 },
               ),
 
-              // SECCIÓN B: Resumen de mi saldo
+              // 2. Resumen Saldo
               Container(
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.all(16),
@@ -243,7 +319,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 ),
               ),
 
-              //SECCIÓN C: Lista de Gastos
+              // 3. Lista de Gastos
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
                   stream: groupRef.collection('expenses').orderBy('createdAt', descending: true).snapshots(),
@@ -260,16 +336,41 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       separatorBuilder: (_,__) => const Divider(),
                       itemBuilder: (ctx, i) {
                         final eData = expenses[i].data() as Map<String, dynamic>;
+                        final category = eData['category'] as String? ?? 'Otros';
+
+                        // Icono según categoría
+                        final icon = _categoryIcons[category] ?? Icons.receipt;
+
                         return ListTile(
-                          leading: CircleAvatar(child: const Icon(Icons.receipt), backgroundColor: Colors.purple[100]),
+                          leading: CircleAvatar(
+                            backgroundColor: Colors.blue[50],
+                            child: Icon(icon, color: Colors.blue[800]),
+                          ),
                           title: Text(eData['description'] ?? 'Sin descripción'),
-                          subtitle: Text("${NumberFormat.simpleCurrency().format(eData['amount'])} • ${eData['paidByName']}"),
-                          trailing: eData['receiptUrl'] != null
-                              ? IconButton(
-                            icon: const Icon(Icons.visibility, color: Colors.blue),
-                            onPressed: () => _showReceiptDialog(context, eData['receiptUrl'], eData['description'] ?? ''),
-                          )
-                              : null,
+                          subtitle: Text("$category • Pagado por ${eData['paidByName']}"),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                  NumberFormat.simpleCurrency().format(eData['amount']),
+                                  style: const TextStyle(fontWeight: FontWeight.bold)
+                              ),
+                              const SizedBox(width: 8),
+
+                              // --- OJO (Lógica Beta) ---
+                              if (eData['receiptUrl'] != null && eData['receiptUrl'].toString().isNotEmpty)
+                                IconButton(
+                                  icon: const Icon(Icons.visibility, color: Colors.blue),
+                                  onPressed: () => _showReceiptDialog(context, eData['receiptUrl'], eData['description'] ?? ''),
+                                  tooltip: 'Ver recibo',
+                                )
+                              else
+                                const IconButton(
+                                  icon: Icon(Icons.visibility_off, color: Colors.grey),
+                                  onPressed: null,
+                                ),
+                            ],
+                          ),
                         );
                       },
                     );
@@ -280,9 +381,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.pushNamed(context, '/add-expense', arguments: {'groupId': widget.groupId}),
-        child: const Icon(Icons.add),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          // Navegación Directa a Agregar Gasto
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => AddExpenseScreen(groupId: widget.groupId),
+            ),
+          );
+        },
+        label: const Text("Gasto"),
+        icon: const Icon(Icons.add),
       ),
     );
   }
