@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
-
+import 'settle_debt_screen.dart';
 class GroupDetailScreen extends StatefulWidget {
   final String groupId;
   final String groupName;
@@ -20,123 +20,125 @@ class GroupDetailScreen extends StatefulWidget {
 class _GroupDetailScreenState extends State<GroupDetailScreen> {
   final currentUser = FirebaseAuth.instance.currentUser;
 
-  // Recalcular Balances
+  // 1. LÓGICA: Confirmar un pago recibido
+  Future<void> _confirmPayment(String settlementId, String fromUid, double amount) async {
+    try {
+      final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
+      final settlementRef = groupRef.collection('settlements').doc(settlementId);
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final groupSnapshot = await transaction.get(groupRef);
+        final groupData = groupSnapshot.data() as Map<String, dynamic>;
+
+        Map<String, double> currentBalances = (groupData['balances'] as Map<String, dynamic>?)
+            ?.map((key, value) => MapEntry(key, (value as num).toDouble())) ?? {};
+
+        double balancePayer = currentBalances[fromUid] ?? 0.0;
+        double balanceReceiver = currentBalances[currentUser!.uid] ?? 0.0;
+
+        // Ajustamos los balances (El que pagó sube, el que recibió baja)
+        currentBalances[fromUid] = double.parse((balancePayer + amount).toStringAsFixed(2));
+        currentBalances[currentUser!.uid] = double.parse((balanceReceiver - amount).toStringAsFixed(2));
+
+        transaction.update(groupRef, {
+          'balances': currentBalances,
+          'lastActivityAt': FieldValue.serverTimestamp(),
+        });
+
+        transaction.update(settlementRef, {'status': 'confirmed'});
+      });
+
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Pago confirmado!')));
+
+    } catch (e) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  //2. LÓGICA: Recalcular Balances (Emergencia)
   Future<void> _recalculateBalances() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Recalculando balances... por favor espera')),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Recalculando...')));
 
     try {
       final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
-        // 1. Obtener datos del grupo y miembros
         final groupSnapshot = await transaction.get(groupRef);
-        if (!groupSnapshot.exists) throw Exception("Grupo no encontrado");
-
         final groupData = groupSnapshot.data() as Map<String, dynamic>;
         final members = List<String>.from(groupData['members'] ?? []);
 
         if (members.isEmpty) return;
 
-        // 2. Obtener TODOS los gastos de la subcolección para sumar de nuevo
         final expensesSnapshot = await groupRef.collection('expenses').get();
+        // Solo contamos pagos CONFIRMADOS para el recalculo
+        final settlementsSnapshot = await groupRef.collection('settlements').where('status', isEqualTo: 'confirmed').get();
 
-        // 3. Reiniciar balances a 0 para todos
         Map<String, double> newBalances = {};
-        for (var m in members) {
-          newBalances[m] = 0.0;
-        }
+        for (var m in members) newBalances[m] = 0.0;
 
         double totalExpenses = 0.0;
 
-        // 4. Recorrer cada gasto y aplicar la matemática
+        // Sumar Gastos (Deudas)
         for (var doc in expensesSnapshot.docs) {
           final data = doc.data();
           final double amount = (data['amount'] as num).toDouble();
           final String payerId = data['paidBy'];
-
           totalExpenses += amount;
           final double sharePerPerson = amount / members.length;
 
           for (var memberId in members) {
             double current = newBalances[memberId] ?? 0.0;
-            if (memberId == payerId) {
-              current += (amount - sharePerPerson);
-            } else {
-              current -= sharePerPerson;
-            }
+            if (memberId == payerId) current += (amount - sharePerPerson);
+            else current -= sharePerPerson;
             newBalances[memberId] = current;
           }
         }
 
-        // 5. Redondeo final a 2 decimales
+        // Sumar Pagos (Abonos)
+        for (var doc in settlementsSnapshot.docs) {
+          final data = doc.data();
+          final double amount = (data['amount'] as num).toDouble();
+          final String fromUid = data['fromUid'];
+          final String toUid = data['toUid'];
+
+          if (newBalances.containsKey(fromUid)) newBalances[fromUid] = (newBalances[fromUid] ?? 0) + amount;
+          if (newBalances.containsKey(toUid)) newBalances[toUid] = (newBalances[toUid] ?? 0) - amount;
+        }
+
         newBalances.forEach((key, value) {
           newBalances[key] = double.parse(value.toStringAsFixed(2));
         });
 
-        // 6. Guardar los nuevos balances limpios
         transaction.update(groupRef, {
           'balances': newBalances,
           'totalExpenses': totalExpenses,
-          'lastActivityAt': FieldValue.serverTimestamp(),
         });
       });
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('¡Balances corregidos correctamente!'), backgroundColor: Colors.green),
-      );
-
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Listo.')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al recalcular: $e'), backgroundColor: Colors.red),
-      );
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
-  // Función para mostrar el recibo en un diálogo con zoom
+  // 3.UI: Diálogo del Recibo
   void _showReceiptDialog(BuildContext context, String imageUrl, String description) {
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             AppBar(
-              title: Text(description, overflow: TextOverflow.ellipsis),
-              leading: IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.of(ctx).pop(),
-              ),
-              elevation: 0,
+              title: Text(description),
+              leading: CloseButton(),
               backgroundColor: Colors.transparent,
+              elevation: 0,
               foregroundColor: Colors.black,
             ),
             SizedBox(
               height: 400,
               child: InteractiveViewer(
-                panEnabled: true,
-                boundaryMargin: const EdgeInsets.all(20),
-                minScale: 0.5,
-                maxScale: 4,
-                child: Image.network(
-                  imageUrl,
-                  fit: BoxFit.contain,
-                  loadingBuilder: (ctx, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return const Center(child: CircularProgressIndicator());
-                  },
-                  errorBuilder: (ctx, error, stackTrace) =>
-                  const Center(child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.broken_image, size: 50, color: Colors.grey),
-                      Text("Error al cargar la imagen", style: TextStyle(color: Colors.grey)),
-                    ],
-                  )),
-                ),
+                child: Image.network(imageUrl, fit: BoxFit.contain),
               ),
             ),
           ],
@@ -145,209 +147,129 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 
-  // Widget para construir la sección de Balances
-  Widget _buildBalancesSection(Map<String, dynamic> balances, Map<String, String> memberNames) {
-    final myBalance = (balances[currentUser?.uid] as num?)?.toDouble() ?? 0.0;
-
-    List<Widget> balanceWidgets = [];
-
-    // Mi resumen personal
-    Color statusColor;
-    String statusText;
-    if (myBalance > 0) {
-      statusColor = Colors.green;
-      statusText = "Te deben en total: ${NumberFormat.simpleCurrency().format(myBalance)}";
-    } else if (myBalance < 0) {
-      statusColor = Colors.red;
-      statusText = "Debes en total: ${NumberFormat.simpleCurrency().format(myBalance.abs())}";
-    } else {
-      statusColor = Colors.grey;
-      statusText = "Estás al día (Saldo: 0)";
-    }
-
-    balanceWidgets.add(
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: statusColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: statusColor),
-          ),
-          child: Text(
-            statusText,
-            style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 16),
-            textAlign: TextAlign.center,
-          ),
-        )
-    );
-
-    balanceWidgets.add(const SizedBox(height: 16));
-    balanceWidgets.add(const Text("Detalle de Saldos:", style: TextStyle(fontWeight: FontWeight.bold)));
-    balanceWidgets.add(const SizedBox(height: 8));
-
-    // Lista detallada
-    if (balances.isEmpty) {
-      balanceWidgets.add(const Text("No hay deudas registradas.", style: TextStyle(fontStyle: FontStyle.italic)));
-    } else {
-      balances.forEach((uid, amountNum) {
-        if (uid == currentUser?.uid) return;
-
-        final amount = (amountNum as num).toDouble();
-        final name = memberNames[uid] ?? 'Usuario';
-
-        if (amount == 0) return;
-
-        String detailText;
-        Color itemColor;
-        IconData itemIcon;
-
-        if (amount > 0) {
-          detailText = "$name debe ${NumberFormat.simpleCurrency().format(amount)}";
-          itemColor = Colors.orange;
-          itemIcon = Icons.arrow_outward;
-        } else {
-          detailText = "Se le debe a $name: ${NumberFormat.simpleCurrency().format(amount.abs())}";
-          itemColor = Colors.blueGrey;
-          itemIcon = Icons.arrow_back;
-        }
-
-        balanceWidgets.add(
-            ListTile(
-              leading: Icon(itemIcon, color: itemColor),
-              title: Text(detailText),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-            )
-        );
-      });
-    }
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 20),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: balanceWidgets,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final groupDocRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
-    final expensesQuery = groupDocRef.collection('expenses').orderBy('createdAt', descending: true);
+    final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.groupName),
         actions: [
-          // Botón de Recalcular (Refresh)
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: "Recalcular Balances",
             onPressed: _recalculateBalances,
-          ),
-          // Botón de Info
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () {
-              // Lógica futura para ver código
-            },
+            tooltip: 'Recalcular',
           ),
         ],
       ),
       body: StreamBuilder<DocumentSnapshot>(
-        stream: groupDocRef.snapshots(),
-        builder: (context, groupSnapshot) {
-          if (groupSnapshot.hasError) return Center(child: Text('Error: ${groupSnapshot.error}'));
-          if (!groupSnapshot.hasData) return const Center(child: CircularProgressIndicator());
+        stream: groupRef.snapshots(),
+        builder: (context, snapshot) {
+          // Manejo de carga y errores
+          if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snapshot.data!.exists) return const Center(child: Text('El grupo no existe'));
 
-          final groupData = groupSnapshot.data!.data() as Map<String, dynamic>?;
-          if (groupData == null) return const Center(child: Text('Grupo no encontrado'));
-
-          final balances = groupData['balances'] as Map<String, dynamic>? ?? {};
-
-          final Map<String, String> memberNamesDummy = {
-            currentUser?.uid ?? '': 'Tú',
-          };
+          final data = snapshot.data!.data() as Map<String, dynamic>;
+          final balances = data['balances'] as Map<String, dynamic>? ?? {};
+          final myBalance = (balances[currentUser?.uid] as num?)?.toDouble() ?? 0.0;
 
           return Column(
             children: [
-              // 1. SECCIÓN DE BALANCES
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: _buildBalancesSection(balances, memberNamesDummy),
+              // SECCIÓN A: Notificaciones de pago
+              StreamBuilder<QuerySnapshot>(
+                stream: groupRef.collection('settlements')
+                    .where('toUid', isEqualTo: currentUser?.uid)
+                    .where('status', isEqualTo: 'pending')
+                    .snapshots(),
+                builder: (ctx, snap) {
+                  if (!snap.hasData || snap.data!.docs.isEmpty) return const SizedBox.shrink();
+                  return Container(
+                    color: Colors.orange[100],
+                    child: Column(
+                      children: snap.data!.docs.map((doc) {
+                        final pData = doc.data() as Map<String, dynamic>;
+                        return ListTile(
+                          leading: const Icon(Icons.notifications_active, color: Colors.deepOrange),
+                          title: Text("${pData['fromName']} dice que pagó"),
+                          subtitle: Text(NumberFormat.simpleCurrency().format(pData['amount'])),
+                          trailing: ElevatedButton(
+                            onPressed: () => _confirmPayment(doc.id, pData['fromUid'], (pData['amount'] as num).toDouble()),
+                            child: const Text("Confirmar"),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  );
+                },
               ),
 
-              const Divider(height: 1),
+              // SECCIÓN B: Resumen de mi saldo
+              Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: myBalance < 0 ? Colors.red[50] : (myBalance > 0 ? Colors.green[50] : Colors.grey[100]),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: myBalance < 0 ? Colors.red : (myBalance > 0 ? Colors.green : Colors.grey)),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      myBalance < 0
+                          ? "Debes ${NumberFormat.simpleCurrency().format(myBalance.abs())}"
+                          : (myBalance > 0 ? "Te deben ${NumberFormat.simpleCurrency().format(myBalance)}" : "Estás al día"),
+                      style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: myBalance < 0 ? Colors.red : (myBalance > 0 ? Colors.green : Colors.grey[700])
+                      ),
+                    ),
+                    if (myBalance < 0) ...[
+                      const SizedBox(height: 10),
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => SettleDebtScreen(
+                            groupId: widget.groupId,
+                            balances: balances,
+                          )));
+                        },
+                        icon: const Icon(Icons.money_off),
+                        label: const Text("Saldar Deuda"),
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                      )
+                    ]
+                  ],
+                ),
+              ),
 
-              // 2. LISTA DE GASTOS
+              //SECCIÓN C: Lista de Gastos
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
-                  stream: expensesQuery.snapshots(),
-                  builder: (context, expensesSnapshot) {
-                    if (expensesSnapshot.hasError) return Center(child: Text('Error: ${expensesSnapshot.error}'));
-                    if (expensesSnapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    final expenses = expensesSnapshot.data!.docs;
+                  stream: groupRef.collection('expenses').orderBy('createdAt', descending: true).snapshots(),
+                  builder: (context, expSnap) {
+                    if (!expSnap.hasData) return const Center(child: CircularProgressIndicator());
+                    final expenses = expSnap.data!.docs;
 
                     if (expenses.isEmpty) {
-                      return const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(20.0),
-                          child: Text("Aún no hay gastos.", style: TextStyle(color: Colors.grey)),
-                        ),
-                      );
+                      return const Center(child: Text("No hay gastos aún", style: TextStyle(color: Colors.grey)));
                     }
 
                     return ListView.separated(
                       itemCount: expenses.length,
-                      separatorBuilder: (ctx, i) => const Divider(height: 1),
-                      itemBuilder: (ctx, index) {
-                        final expenseData = expenses[index].data() as Map<String, dynamic>;
-                        final amount = (expenseData['amount'] as num).toDouble();
-                        final description = expenseData['description'] as String;
-                        final paidByName = expenseData['paidByName'] as String? ?? 'Alguien';
-                        final receiptUrl = expenseData['receiptUrl'] as String?;
-                        final createdAt = (expenseData['createdAt'] as Timestamp?)?.toDate();
-
-                        final dateStr = createdAt != null
-                            ? DateFormat('dd/MM/yy').format(createdAt)
-                            : 'Fecha desc.';
-
+                      separatorBuilder: (_,__) => const Divider(),
+                      itemBuilder: (ctx, i) {
+                        final eData = expenses[i].data() as Map<String, dynamic>;
                         return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: Colors.purple[100],
-                            child: const Icon(Icons.receipt_long, color: Colors.purple),
-                          ),
-                          title: Text(description, style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text("$dateStr - Pagado por $paidByName"),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                NumberFormat.simpleCurrency().format(amount),
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                              ),
-                              const SizedBox(width: 8),
-                              // BOTÓN DEL OJO
-                              if (receiptUrl != null && receiptUrl.isNotEmpty)
-                                IconButton(
-                                  icon: const Icon(Icons.visibility, color: Colors.blue),
-                                  onPressed: () => _showReceiptDialog(context, receiptUrl, description),
-                                  tooltip: 'Ver recibo',
-                                )
-                              else
-                                const IconButton(
-                                  icon: Icon(Icons.visibility_off, color: Colors.grey),
-                                  onPressed: null,
-                                ),
-                            ],
-                          ),
+                          leading: CircleAvatar(child: const Icon(Icons.receipt), backgroundColor: Colors.purple[100]),
+                          title: Text(eData['description'] ?? 'Sin descripción'),
+                          subtitle: Text("${NumberFormat.simpleCurrency().format(eData['amount'])} • ${eData['paidByName']}"),
+                          trailing: eData['receiptUrl'] != null
+                              ? IconButton(
+                            icon: const Icon(Icons.visibility, color: Colors.blue),
+                            onPressed: () => _showReceiptDialog(context, eData['receiptUrl'], eData['description'] ?? ''),
+                          )
+                              : null,
                         );
                       },
                     );
@@ -358,16 +280,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           );
         },
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.pushNamed(
-              context,
-              '/add-expense',
-              arguments: {'groupId': widget.groupId}
-          );
-        },
-        label: const Text('Nuevo Gasto'),
-        icon: const Icon(Icons.add),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => Navigator.pushNamed(context, '/add-expense', arguments: {'groupId': widget.groupId}),
+        child: const Icon(Icons.add),
       ),
     );
   }

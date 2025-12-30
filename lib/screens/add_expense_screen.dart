@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart'; // Nuevo import
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
 class AddExpenseScreen extends StatefulWidget {
@@ -93,7 +93,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       final String userName = userDoc.exists ? (userDoc.data()!['name'] ?? 'Usuario') : 'Usuario';
       final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
 
-      // 2. Generar el ID del gasto ANTES de guardar para usarlo en el nombre de la foto
+      // 2. Generar el ID
       final newExpenseDoc = groupRef.collection('expenses').doc();
 
       // 3. Subir imagen
