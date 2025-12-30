@@ -23,7 +23,6 @@ class GroupDetailScreen extends StatefulWidget {
 class _GroupDetailScreenState extends State<GroupDetailScreen> {
   final currentUser = FirebaseAuth.instance.currentUser;
 
-  // Mapa maestro de iconos
   final Map<String, IconData> _categoryIcons = {
     'Comida': Icons.restaurant,
     'Transporte': Icons.directions_bus,
@@ -35,7 +34,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     'Otros': Icons.receipt,
   };
 
-  //1. LÓGICA: Confirmar un pago recibido
+  // Confirmar pago recibido
   Future<void> _confirmPayment(String settlementId, String fromUid, double amount) async {
     try {
       final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
@@ -51,7 +50,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         double balancePayer = currentBalances[fromUid] ?? 0.0;
         double balanceReceiver = currentBalances[currentUser!.uid] ?? 0.0;
 
-        // Ajustamos balances
         currentBalances[fromUid] = double.parse((balancePayer + amount).toStringAsFixed(2));
         currentBalances[currentUser!.uid] = double.parse((balanceReceiver - amount).toStringAsFixed(2));
 
@@ -63,14 +61,14 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         transaction.update(settlementRef, {'status': 'confirmed'});
       });
 
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Pago confirmado!')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('¡Pago confirmado!')));
 
     } catch (e) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
-  //2. LÓGICA: Recalcular Balances
+  // Recalcular balances
   Future<void> _recalculateBalances() async {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Recalculando...')));
 
@@ -92,7 +90,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
         double totalExpenses = 0.0;
 
-        // Sumar Gastos
+        // Sumar gastos
         for (var doc in expensesSnapshot.docs) {
           final data = doc.data();
           final double amount = (data['amount'] as num).toDouble();
@@ -108,7 +106,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           }
         }
 
-        // Sumar Pagos Confirmados
+        // Sumar pagos confirmados
         for (var doc in settlementsSnapshot.docs) {
           final data = doc.data();
           final double amount = (data['amount'] as num).toDouble();
@@ -128,13 +126,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           'totalExpenses': totalExpenses,
         });
       });
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Listo.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Listo.')));
     } catch (e) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
-  //3. UI: Diálogo del Recibo
+  // Ver recibo
   void _showReceiptDialog(BuildContext context, String imageUrl, String description) {
     showDialog(
       context: context,
@@ -161,7 +159,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 
-  // 4. UI: Mostrar Info del Grupo y Copiar Código
+  // Info del grupo
   void _showGroupInfo() async {
     final groupDoc = await FirebaseFirestore.instance.collection('groups').doc(widget.groupId).get();
     final data = groupDoc.data();
@@ -176,22 +174,22 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text("Comparte este código para que otros se unan a tu viaje:"),
+            const Text("Comparte este código:"),
             const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               decoration: BoxDecoration(
                 color: Colors.blue[50],
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue),
+                border: Border.all(color: Theme.of(context).primaryColor),
               ),
               child: Text(
                 joinCode,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 2,
-                    color: Colors.blueAccent
+                    color: Theme.of(context).primaryColor
                 ),
               ),
             ),
@@ -203,7 +201,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               Clipboard.setData(ClipboardData(text: joinCode));
               Navigator.pop(ctx);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('¡Código copiado al portapapeles!'), backgroundColor: Colors.green),
+                const SnackBar(content: Text('Copiado al portapapeles'), backgroundColor: Colors.green),
               );
             },
             icon: const Icon(Icons.copy),
@@ -231,11 +229,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             onPressed: _recalculateBalances,
             tooltip: 'Recalcular',
           ),
-          // Botón de INFO (Ver Código)
           IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: _showGroupInfo,
-            tooltip: 'Ver código de grupo',
+            tooltip: 'Ver código',
           ),
         ],
       ),
@@ -250,9 +247,14 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           final balances = data['balances'] as Map<String, dynamic>? ?? {};
           final myBalance = (balances[currentUser?.uid] as num?)?.toDouble() ?? 0.0;
 
+          // Colores de estado
+          final isNegative = myBalance < 0;
+          final isPositive = myBalance > 0;
+          final statusColor = isNegative ? Colors.red : (isPositive ? Colors.green : Colors.grey);
+
           return Column(
             children: [
-              // 1. Notificaciones de Pagos
+              // 1. Notificaciones
               StreamBuilder<QuerySnapshot>(
                 stream: groupRef.collection('settlements')
                     .where('toUid', isEqualTo: currentUser?.uid)
@@ -261,7 +263,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 builder: (ctx, snap) {
                   if (!snap.hasData || snap.data!.docs.isEmpty) return const SizedBox.shrink();
                   return Container(
-                    color: Colors.orange[100],
+                    color: Colors.orange[50],
                     child: Column(
                       children: snap.data!.docs.map((doc) {
                         final pData = doc.data() as Map<String, dynamic>;
@@ -285,23 +287,19 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: myBalance < 0 ? Colors.red[50] : (myBalance > 0 ? Colors.green[50] : Colors.grey[100]),
+                  color: statusColor.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: myBalance < 0 ? Colors.red : (myBalance > 0 ? Colors.green : Colors.grey)),
+                  border: Border.all(color: statusColor),
                 ),
                 child: Column(
                   children: [
                     Text(
-                      myBalance < 0
+                      isNegative
                           ? "Debes ${NumberFormat.simpleCurrency().format(myBalance.abs())}"
-                          : (myBalance > 0 ? "Te deben ${NumberFormat.simpleCurrency().format(myBalance)}" : "Estás al día"),
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: myBalance < 0 ? Colors.red : (myBalance > 0 ? Colors.green : Colors.grey[700])
-                      ),
+                          : (isPositive ? "Te deben ${NumberFormat.simpleCurrency().format(myBalance)}" : "Estás al día"),
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: statusColor),
                     ),
-                    if (myBalance < 0) ...[
+                    if (isNegative) ...[
                       const SizedBox(height: 10),
                       ElevatedButton.icon(
                         onPressed: () {
@@ -337,8 +335,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       itemBuilder: (ctx, i) {
                         final eData = expenses[i].data() as Map<String, dynamic>;
                         final category = eData['category'] as String? ?? 'Otros';
-
-                        // Icono según categoría
                         final icon = _categoryIcons[category] ?? Icons.receipt;
 
                         return ListTile(
@@ -357,7 +353,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                               ),
                               const SizedBox(width: 8),
 
-                              // --- OJO (Lógica Beta) ---
+                              // Visualizador de recibo
                               if (eData['receiptUrl'] != null && eData['receiptUrl'].toString().isNotEmpty)
                                 IconButton(
                                   icon: const Icon(Icons.visibility, color: Colors.blue),
@@ -383,12 +379,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
-          // Navegación Directa a Agregar Gasto
           Navigator.push(
             context,
-            MaterialPageRoute(
-              builder: (context) => AddExpenseScreen(groupId: widget.groupId),
-            ),
+            MaterialPageRoute(builder: (context) => AddExpenseScreen(groupId: widget.groupId)),
           );
         },
         label: const Text("Gasto"),

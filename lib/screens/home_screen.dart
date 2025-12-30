@@ -4,7 +4,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'create_group_screen.dart';
 import 'join_group_screen.dart';
 import 'group_detail_screen.dart';
-import 'login_screen.dart';
 import 'welcome_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -17,7 +16,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final user = FirebaseAuth.instance.currentUser;
 
-  //  2. LÓGICA DE CERRAR SESIÓN ACTUALIZADA
+  // Cerrar sesión y limpiar historial
   void _logout() async {
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
@@ -42,6 +41,7 @@ class _HomeScreenState extends State<HomeScreen> {
           )
         ],
       ),
+      // Stream del usuario para obtener array 'groups'
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance.collection('users').doc(user!.uid).snapshots(),
         builder: (context, snapshot) {
@@ -55,14 +55,13 @@ class _HomeScreenState extends State<HomeScreen> {
           }
 
           final userData = snapshot.data!.data() as Map<String, dynamic>;
-          // Obtenemos la lista de IDs de grupos donde está el usuario
           final List<dynamic> groupIds = userData['groups'] ?? [];
 
           if (groupIds.isEmpty) {
-            return Center(
+            return const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
+                children: [
                   Icon(Icons.group_off, size: 60, color: Colors.grey),
                   SizedBox(height: 10),
                   Text("No tienes grupos aún."),
@@ -73,29 +72,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
           return ListView.builder(
             itemCount: groupIds.length,
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(12),
             itemBuilder: (context, index) {
               final groupId = groupIds[index];
 
-              // Por cada ID, buscamos la info del grupo en tiempo real
+              // Stream individual por grupo
               return StreamBuilder<DocumentSnapshot>(
                 stream: FirebaseFirestore.instance.collection('groups').doc(groupId).snapshots(),
                 builder: (ctx, groupSnap) {
-                  if (!groupSnap.hasData) return const SizedBox.shrink(); // Cargando silencioso
+                  if (!groupSnap.hasData) return const SizedBox.shrink();
 
                   final groupData = groupSnap.data!.data() as Map<String, dynamic>?;
-                  if (groupData == null) return const SizedBox.shrink(); // Grupo borrado o error
+                  if (groupData == null) return const SizedBox.shrink();
 
                   final metadata = groupData['metadata'] as Map<String, dynamic>? ?? {};
-                  final name = metadata['name'] ?? 'Grupo sin nombre';
+                  final name = metadata['name'] ?? 'Sin nombre';
                   final code = metadata['joinCode'] ?? '---';
 
                   return Card(
-                    margin: const EdgeInsets.symmetric(vertical: 5),
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: Colors.blueAccent,
-                        child: Text(name.substring(0, 1).toUpperCase(), style: const TextStyle(color: Colors.white)),
+                        backgroundColor: Theme.of(context).primaryColor,
+                        child: Text(
+                          name.substring(0, 1).toUpperCase(),
+                          style: const TextStyle(color: Colors.white),
+                        ),
                       ),
                       title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
                       subtitle: Text('Código: $code'),
@@ -106,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           MaterialPageRoute(
                             builder: (_) => GroupDetailScreen(
                               groupId: groupId,
-                              groupName: name, // Enviamos el nombre recuperado
+                              groupName: name,
                             ),
                           ),
                         );
@@ -122,16 +123,18 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
+          // Botón Unirse
           FloatingActionButton(
             heroTag: "join",
             onPressed: () {
               Navigator.push(context, MaterialPageRoute(builder: (_) => const JoinGroupScreen()));
             },
             backgroundColor: Colors.white,
-            foregroundColor: Colors.blue,
+            foregroundColor: Theme.of(context).primaryColor,
             child: const Icon(Icons.group_add),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 16),
+          // Botón Crear
           FloatingActionButton(
             heroTag: "create",
             onPressed: () {

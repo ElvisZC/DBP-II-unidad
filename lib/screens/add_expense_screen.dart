@@ -25,7 +25,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   bool _isLoading = false;
   bool _isUploading = false;
 
-  // Lista de categorías inicial
+  // Configuración de categorías
   String _selectedCategory = 'Otros';
   final Map<String, IconData> _categories = {
     'Comida': Icons.restaurant,
@@ -46,7 +46,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     }
   }
 
-  // NUEVA CATEGORÍA
+  // Diálogo para categoría personalizada
   void _showAddCategoryDialog() {
     TextEditingController newCategoryController = TextEditingController();
     showDialog(
@@ -62,7 +62,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
-              setState(() => _selectedCategory = 'Otros'); // Cancelar vuelve a Otros
+              setState(() => _selectedCategory = 'Otros');
             },
             child: const Text("Cancelar"),
           ),
@@ -71,8 +71,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
               if (newCategoryController.text.isNotEmpty) {
                 final newCat = newCategoryController.text.trim();
                 setState(() {
-                  // Agregamos la nueva categoría al mapa local
-                  _categories[newCat] = Icons.star; // Icono genérico para las personalizadas
+                  _categories[newCat] = Icons.star;
                   _selectedCategory = newCat;
                 });
                 Navigator.pop(ctx);
@@ -85,6 +84,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     );
   }
 
+  // Subida de imagen a Storage
   Future<String?> _uploadImage(String expenseId) async {
     if (_selectedImage == null) return null;
     try {
@@ -93,21 +93,18 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       await storageRef.putFile(_selectedImage!);
       return await storageRef.getDownloadURL();
     } catch (e) {
-      print("Error subiendo imagen: $e");
+      debugPrint("Error subiendo imagen: $e");
       return null;
     }
   }
 
-  // FUNCIÓN PRINCIPAL BLINDADA
+  // Guardar gasto
   Future<void> addExpense() async {
-    print("INTENTANDO GUARDAR GASTO");
-
-    // 1. Ocultar teclado
     FocusScope.of(context).unfocus();
 
     if (_isLoading) return;
 
-    // 2. Validación Descripción
+    // Validaciones
     if (_descriptionController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('🛑 Faltó la descripción'), backgroundColor: Colors.red)
@@ -115,14 +112,13 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       return;
     }
 
-    // 3. CORRECCIÓN DE COMA
+    // Formateo de monto (coma por punto)
     String amountText = _amountController.text.trim().replaceAll(',', '.');
     final double? amount = double.tryParse(amountText);
 
     if (amount == null || amount <= 0) {
-      print("Error: Monto inválido recibido: $amountText");
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('🛑 El monto no es válido (Ej: 10.50)'), backgroundColor: Colors.red)
+          const SnackBar(content: Text('🛑 Monto inválido'), backgroundColor: Colors.red)
       );
       return;
     }
@@ -139,7 +135,6 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final String userName = userDoc.exists ? (userDoc.data()!['name'] ?? 'Usuario') : 'Usuario';
       final groupRef = FirebaseFirestore.instance.collection('groups').doc(widget.groupId);
-
       final newExpenseDoc = groupRef.collection('expenses').doc();
 
       String? receiptUrl;
@@ -147,7 +142,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         receiptUrl = await _uploadImage(newExpenseDoc.id);
       }
 
-      // Guardar Gasto
+      // Guardado en Firestore
       await newExpenseDoc.set({
         'description': _descriptionController.text.trim(),
         'amount': amount,
@@ -158,21 +153,20 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // Actualizar Balances
+      // Actualizar saldos
       await _updateBalancesIncrementally(groupRef, user.uid, amount);
 
-      print("¡ÉXITO!");
       if (!mounted) return;
       Navigator.pop(context);
 
     } catch (e) {
-      print("ERROR FATAL: $e");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     } finally {
       if (mounted) setState(() { _isLoading = false; _isUploading = false; });
     }
   }
 
+  // Transacción de actualización de balances
   Future<void> _updateBalancesIncrementally(DocumentReference groupRef, String payerId, double newExpenseAmount) async {
     return FirebaseFirestore.instance.runTransaction((transaction) async {
       final groupSnapshot = await transaction.get(groupRef);
@@ -200,7 +194,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Lista para el Dropdown
+    // Preparar lista del Dropdown
     List<DropdownMenuItem<String>> dropdownItems = _categories.keys.map((String category) {
       return DropdownMenuItem<String>(
         value: category,
@@ -214,7 +208,6 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       );
     }).toList();
 
-    // Opción especial
     dropdownItems.add(
         const DropdownMenuItem<String>(
           value: '➕ Crear nueva...',
@@ -235,6 +228,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Selector de Imagen
             GestureDetector(
               onTap: _pickImage,
               child: Container(
@@ -242,11 +236,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                 decoration: BoxDecoration(
                   color: Colors.grey[200],
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey),
+                  border: Border.all(color: Colors.grey.shade400),
                 ),
                 child: _selectedImage != null
                     ? ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.file(_selectedImage!, fit: BoxFit.cover))
-                    : Column(mainAxisAlignment: MainAxisAlignment.center, children: const [
+                    : const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Icon(Icons.camera_alt, size: 40, color: Colors.grey),
                   Text("Foto del recibo (Opcional)", style: TextStyle(color: Colors.grey)),
                 ]),
@@ -254,45 +248,54 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
             ),
             const SizedBox(height: 20),
 
-            // MENU DESPLEGABLE
+            // Selector de Categoría (Estilo automático por tema)
             DropdownButtonFormField<String>(
               value: _categories.containsKey(_selectedCategory) ? _selectedCategory : null,
               decoration: const InputDecoration(
                 labelText: 'Categoría',
                 prefixIcon: Icon(Icons.category),
-                border: OutlineInputBorder(),
               ),
               items: dropdownItems,
               onChanged: (String? newValue) {
                 if (newValue == '➕ Crear nueva...') {
                   _showAddCategoryDialog();
                 } else {
-                  setState(() {
-                    _selectedCategory = newValue!;
-                  });
+                  setState(() => _selectedCategory = newValue!);
                 }
               },
             ),
 
             const SizedBox(height: 16),
+
+            // Concepto
             TextField(
               controller: _descriptionController,
-              decoration: const InputDecoration(labelText: 'Concepto', prefixIcon: Icon(Icons.description), border: OutlineInputBorder()),
+              decoration: const InputDecoration(
+                labelText: 'Concepto',
+                prefixIcon: Icon(Icons.description),
+              ),
+              textCapitalization: TextCapitalization.sentences,
             ),
             const SizedBox(height: 16),
+
+            // Monto
             TextField(
               controller: _amountController,
-              decoration: const InputDecoration(labelText: 'Monto', prefixIcon: Icon(Icons.attach_money), border: OutlineInputBorder()),
+              decoration: const InputDecoration(
+                labelText: 'Monto',
+                prefixIcon: Icon(Icons.attach_money),
+              ),
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
             ),
             const SizedBox(height: 24),
+
+            // Botón Guardar
             ElevatedButton.icon(
               onPressed: _isLoading ? null : addExpense,
               icon: _isLoading
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.save),
               label: Text(_isLoading ? 'Guardando...' : 'Guardar Gasto'),
-              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
             ),
           ],
         ),

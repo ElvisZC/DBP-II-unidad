@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'register_screen.dart'; // Asegúrate de tener este import
-import 'home_screen.dart';   // Y este
+import 'register_screen.dart';
+import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -18,12 +18,15 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _login() async {
     setState(() => _isLoading = true);
     try {
+      // Autenticación en Firebase
       await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
+
       if (!mounted) return;
-      // Navegar al Home y borrar historial para no volver al login
+
+      // Limpiar historial y navegar al Home
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -41,23 +44,22 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // El color de fondo ya viene del tema (gris clarito)
-      appBar: AppBar(
-        title: const Text('Iniciar Sesión'),
-        // No necesitamos poner backgroundColor aquí, el tema ya sabe que es Azul
-      ),
+      appBar: AppBar(title: const Text('Iniciar Sesión')),
       body: Center(
-        child: SingleChildScrollView( // Para que no tape el teclado
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Icono bonito arriba
-              const Icon(Icons.lock_open_rounded, size: 80, color: Colors.blueAccent),
+              Icon(
+                  Icons.lock_open_rounded,
+                  size: 80,
+                  color: Theme.of(context).primaryColor // Color dinámico del tema
+              ),
               const SizedBox(height: 30),
 
-              // Campo Email (Sin decoración manual, el tema lo hace bonito)
+              // Email
               TextField(
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
@@ -68,7 +70,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 20),
 
-              // Campo Contraseña
+              // Contraseña
               TextField(
                 controller: _passwordController,
                 obscureText: true,
@@ -79,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 40),
 
-              // Botón Principal
+              // Botón Ingresar
               ElevatedButton(
                 onPressed: _isLoading ? null : _login,
                 child: _isLoading
@@ -89,7 +91,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
               const SizedBox(height: 20),
 
-              // Botón de Texto para Registro
+              // Ir a Registro
               TextButton(
                 onPressed: () {
                   Navigator.push(
