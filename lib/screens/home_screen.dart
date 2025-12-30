@@ -5,6 +5,7 @@ import 'create_group_screen.dart';
 import 'join_group_screen.dart';
 import 'group_detail_screen.dart';
 import 'login_screen.dart';
+import 'welcome_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,23 +17,29 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final user = FirebaseAuth.instance.currentUser;
 
+  //  2. LÓGICA DE CERRAR SESIÓN ACTUALIZADA
   void _logout() async {
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
-    Navigator.pushReplacement(
+
+    Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+          (route) => false,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Escuchamos los cambios en el documento del USUARIO para ver sus grupos
     return Scaffold(
       appBar: AppBar(
         title: const Text('Mis Grupos'),
         actions: [
-          IconButton(onPressed: _logout, icon: const Icon(Icons.exit_to_app))
+          IconButton(
+            onPressed: _logout,
+            icon: const Icon(Icons.exit_to_app),
+            tooltip: "Cerrar Sesión",
+          )
         ],
       ),
       body: StreamBuilder<DocumentSnapshot>(
@@ -94,7 +101,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       subtitle: Text('Código: $code'),
                       trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                       onTap: () {
-
                         Navigator.push(
                           context,
                           MaterialPageRoute(
